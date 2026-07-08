@@ -31,6 +31,12 @@ uv run pytest -q
 - If required `DB_*` env vars are missing (or left as placeholders), the DB
   tests are skipped instead of failing.
 
+### Live Ensembl CLI smoke test (`tests/test_cli_integration.py`)
+
+- This test calls the live Ensembl REST API and is opt-in.
+- To run it, set `RUN_EXTERNAL_ENSEMBL=1` and provide a reachable `vgnc_public`
+  database config in env vars / `.env`.
+
 ## Run integration tests with Docker MySQL (local)
 
 1. Start a local MySQL test container and run DB tests:

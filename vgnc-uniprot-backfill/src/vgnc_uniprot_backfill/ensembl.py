@@ -7,10 +7,10 @@ from typing import Any
 
 import requests
 
-_DEFAULT_BASE_URL = "https://rest.ensembl.org"
-_DEFAULT_MAX_PER_SECOND = 15.0
-_DEFAULT_TIMEOUT_SECONDS = 30
-_DEFAULT_USER_AGENT = "vgnc-uniprot-backfill/0.1"
+DEFAULT_BASE_URL = "https://rest.ensembl.org"
+DEFAULT_MAX_PER_SECOND = 15.0
+DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_USER_AGENT = "vgnc-uniprot-backfill/0.1"
 
 
 @dataclass(frozen=True)
@@ -19,15 +19,21 @@ class UniprotXref:
     source: str
 
 
+@dataclass(frozen=True)
+class UniprotLookupResult:
+    xrefs: list[UniprotXref]
+    failed: bool
+
+
 class EnsemblXrefClient:
     def __init__(
         self,
         *,
         session: requests.Session | None = None,
-        base_url: str = _DEFAULT_BASE_URL,
-        max_per_second: float = _DEFAULT_MAX_PER_SECOND,
-        timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
-        user_agent: str = _DEFAULT_USER_AGENT,
+        base_url: str = DEFAULT_BASE_URL,
+        max_per_second: float = DEFAULT_MAX_PER_SECOND,
+        timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        user_agent: str = DEFAULT_USER_AGENT,
         logger: logging.Logger | None = None,
     ) -> None:
         if max_per_second <= 0:
@@ -46,11 +52,17 @@ class EnsemblXrefClient:
         self._min_request_interval_seconds = 1.0 / max_per_second
         self._last_request_started_at: float | None = None
         self._logger = logger or logging.getLogger(__name__)
+        self.last_lookup_failed = False
 
     def fetch_uniprot_xrefs(self, ensembl_gene_id: str) -> list[UniprotXref]:
+        result = self.lookup_uniprot_xrefs(ensembl_gene_id)
+        self.last_lookup_failed = result.failed
+        return result.xrefs
+
+    def lookup_uniprot_xrefs(self, ensembl_gene_id: str) -> UniprotLookupResult:
         response = self._request_once(ensembl_gene_id)
         if response is None:
-            return []
+            return UniprotLookupResult(xrefs=[], failed=True)
 
         if response.status_code == 429:
             retry_after_seconds = _parse_retry_after_seconds(response.headers.get("Retry-After"))
@@ -58,7 +70,7 @@ class EnsemblXrefClient:
                 time.sleep(retry_after_seconds)
             response = self._request_once(ensembl_gene_id)
             if response is None:
-                return []
+                return UniprotLookupResult(xrefs=[], failed=True)
 
         if response.status_code >= 400:
             self._logger.warning(
@@ -66,18 +78,18 @@ class EnsemblXrefClient:
                 ensembl_gene_id,
                 response.status_code,
             )
-            return []
+            return UniprotLookupResult(xrefs=[], failed=True)
 
         try:
             payload = response.json()
         except ValueError:
             self._logger.warning("Invalid JSON payload from Ensembl for %s", ensembl_gene_id)
-            return []
+            return UniprotLookupResult(xrefs=[], failed=True)
 
         if not isinstance(payload, list):
-            return []
+            return UniprotLookupResult(xrefs=[], failed=True)
 
-        return _extract_uniprot_xrefs(payload)
+        return UniprotLookupResult(xrefs=_extract_uniprot_xrefs(payload), failed=False)
 
     def _request_once(self, ensembl_gene_id: str) -> Any | None:
         self._throttle()

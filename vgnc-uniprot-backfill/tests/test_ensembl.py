@@ -112,3 +112,14 @@ def test_fetch_uniprot_xrefs_extracts_unique_uniprot_primary_ids_only() -> None:
     xrefs = client.fetch_uniprot_xrefs("ENSG00000139618")
 
     assert [xref.accession for xref in xrefs] == ["P12345", "Q11111"]
+
+
+def test_lookup_uniprot_xrefs_marks_failures_explicitly() -> None:
+    session = requests.Session()
+    session.get = Mock(return_value=_StubResponse(503, []))
+
+    client = EnsemblXrefClient(session=session)
+    result = client.lookup_uniprot_xrefs("ENSG00000139618")
+
+    assert result.xrefs == []
+    assert result.failed is True
