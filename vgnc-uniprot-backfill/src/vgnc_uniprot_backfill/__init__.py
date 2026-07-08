@@ -1,0 +1,1 @@
+"""VGNC → UniProt backfill package."""

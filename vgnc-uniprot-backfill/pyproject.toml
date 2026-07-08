@@ -1,0 +1,23 @@
+[project]
+name = "vgnc-uniprot-backfill"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "python-dotenv>=1.1.1",
+    "requests>=2.32.4",
+    "vgnc-public-orm",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.12.3",
+]
+
+[tool.uv]
+[tool.uv.sources]
+vgnc-public-orm = { git = "https://github.com/HGNC/vgnc_orm.git", tag = "v0.5.3" }
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta:__legacy__"

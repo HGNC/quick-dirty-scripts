@@ -1,0 +1,142 @@
+name: vgnc-uniprot-backfill CI
+
+on:
+  pull_request:
+    paths:
+      - "vgnc-uniprot-backfill/**"
+      - ".github/workflows/vgnc-uniprot-backfill-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "vgnc-uniprot-backfill/**"
+      - ".github/workflows/vgnc-uniprot-backfill-ci.yml"
+  workflow_dispatch:
+    inputs:
+      dump_url:
+        description: "Optional SQL or SQL.GZ dump URL for DB integration tests"
+        required: false
+        type: string
+
+concurrency:
+  group: vgnc-uniprot-backfill-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-unit:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vgnc-uniprot-backfill
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: vgnc-uniprot-backfill/.python-version
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Unit tests
+        run: uv run pytest tests/test_models.py tests/test_ensembl.py -q
+
+  integration-db:
+    name: DB integration tests
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.dump_url != '') || secrets.VGNC_PUBLIC_SQL_DUMP_URL != '' }}
+    defaults:
+      run:
+        working-directory: vgnc-uniprot-backfill
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: vgnc_public
+      DB_USER: vgnc
+      DB_PASSWORD: vgnc
+      VGNC_PUBLIC_SQL_DUMP_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.dump_url || secrets.VGNC_PUBLIC_SQL_DUMP_URL }}
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: vgnc_public
+          MYSQL_USER: vgnc
+          MYSQL_PASSWORD: vgnc
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=3s
+          --health-timeout=3s
+          --health-retries=30
+          --health-start-period=5s
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: vgnc-uniprot-backfill/.python-version
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Wait for MySQL to become healthy
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' '${{ job.services.mysql.id }}' 2>/dev/null || true)"
+            if [[ "$health" == "healthy" ]]; then
+              break
+            fi
+            sleep 1
+          done
+
+          health="$(docker inspect --format '{{.State.Health.Status}}' '${{ job.services.mysql.id }}' 2>/dev/null || true)"
+          if [[ "$health" != "healthy" ]]; then
+            echo "MySQL service did not become healthy in time" >&2
+            exit 1
+          fi
+
+      - name: Import vgnc_public SQL dump
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${VGNC_PUBLIC_SQL_DUMP_URL}" ]]; then
+            echo "VGNC_PUBLIC_SQL_DUMP_URL is required for integration tests" >&2
+            exit 1
+          fi
+
+          curl -fsSL "${VGNC_PUBLIC_SQL_DUMP_URL}" -o /tmp/vgnc_public.dump
+
+          if [[ "${VGNC_PUBLIC_SQL_DUMP_URL}" == *.gz ]]; then
+            gunzip -c /tmp/vgnc_public.dump > /tmp/vgnc_public.sql
+          else
+            mv /tmp/vgnc_public.dump /tmp/vgnc_public.sql
+          fi
+
+          cat /tmp/vgnc_public.sql | docker exec -i '${{ job.services.mysql.id }}' mysql -uroot -proot vgnc_public
+
+      - name: DB integration tests
+        run: uv run pytest tests/test_db.py -q
