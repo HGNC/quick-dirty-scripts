@@ -1,7 +1,7 @@
 .pi/
 .ai/
 
-# Python caches / envs (all nested projects)
+# Python caches / envs (all nested projects) Needed
 **/.venv/
 **/.pytest_cache/
 **/.ruff_cache/
