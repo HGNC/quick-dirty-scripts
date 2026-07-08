@@ -58,7 +58,5 @@ def test_csv_report_writer_writes_expected_header_and_rows(tmp_path: Path) -> No
 
     assert len(written_rows) == 3
 
-    empty_accession_row = next(
-        row for row in written_rows if row["assigned_id"] == "VGNC:2"
-    )
+    empty_accession_row = next(row for row in written_rows if row["assigned_id"] == "VGNC:2")
     assert empty_accession_row["uniprot_accession"] == ""
