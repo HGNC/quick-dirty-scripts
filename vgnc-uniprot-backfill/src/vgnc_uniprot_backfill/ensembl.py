@@ -11,6 +11,7 @@ DEFAULT_BASE_URL = "https://rest.ensembl.org"
 DEFAULT_MAX_PER_SECOND = 15.0
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_USER_AGENT = "vgnc-uniprot-backfill/0.1"
+DEFAULT_REQUEST_EXCEPTION_RETRY_DELAYS_SECONDS = (30.0, 60.0)
 
 
 @dataclass(frozen=True)
@@ -35,10 +36,15 @@ class EnsemblXrefClient:
         max_per_second: float = DEFAULT_MAX_PER_SECOND,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         user_agent: str = DEFAULT_USER_AGENT,
+        request_exception_retry_delays_seconds: tuple[float, ...] = (
+            DEFAULT_REQUEST_EXCEPTION_RETRY_DELAYS_SECONDS
+        ),
         logger: logging.Logger | None = None,
     ) -> None:
         if max_per_second <= 0:
             raise ValueError("max_per_second must be > 0")
+        if any(delay < 0 for delay in request_exception_retry_delays_seconds):
+            raise ValueError("request_exception_retry_delays_seconds cannot contain negatives")
 
         self._session = session or requests.Session()
         self._session.headers.update(
@@ -51,6 +57,7 @@ class EnsemblXrefClient:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._min_request_interval_seconds = 1.0 / max_per_second
+        self._request_exception_retry_delays_seconds = request_exception_retry_delays_seconds
         self._last_request_started_at: float | None = None
         self._logger = logger or logging.getLogger(__name__)
         self.last_lookup_failed = False
@@ -61,7 +68,7 @@ class EnsemblXrefClient:
         return result.xrefs
 
     def lookup_uniprot_xrefs(self, ensembl_gene_id: str) -> UniprotLookupResult:
-        response = self._request_once(ensembl_gene_id)
+        response = self._request_with_retries(ensembl_gene_id)
         if response is None:
             return UniprotLookupResult(xrefs=[], failed=True)
 
@@ -69,7 +76,7 @@ class EnsemblXrefClient:
             retry_after_seconds = _parse_retry_after_seconds(response.headers.get("Retry-After"))
             if retry_after_seconds > 0:
                 time.sleep(retry_after_seconds)
-            response = self._request_once(ensembl_gene_id)
+            response = self._request_with_retries(ensembl_gene_id)
             if response is None:
                 return UniprotLookupResult(xrefs=[], failed=True)
 
@@ -91,22 +98,88 @@ class EnsemblXrefClient:
             status_code=response.status_code,
         )
 
-    def _request_once(self, ensembl_gene_id: str) -> Any | None:
+    def _request_with_retries(self, ensembl_gene_id: str) -> Any | None:
+        total_attempts = len(self._request_exception_retry_delays_seconds) + 1
+        timeout_multiplier = 1
+
+        for attempt in range(1, total_attempts + 1):
+            request_timeout_seconds = self._timeout_seconds * timeout_multiplier
+            is_last_attempt = attempt == total_attempts
+            try:
+                return self._request_once(
+                    ensembl_gene_id,
+                    timeout_seconds=request_timeout_seconds,
+                )
+            except requests.Timeout as exc:
+                if is_last_attempt:
+                    self._logger.error(
+                        "Request to Ensembl timed out for %s after %d attempts: %s",
+                        ensembl_gene_id,
+                        total_attempts,
+                        exc,
+                    )
+                    return None
+
+                timeout_multiplier += 1
+                retry_delay_seconds = self._request_exception_retry_delays_seconds[attempt - 1]
+                next_timeout_seconds = self._timeout_seconds * timeout_multiplier
+                self._logger.warning(
+                    "Request to Ensembl timed out for %s on attempt %d/%d. "
+                    "Retrying in %.0f seconds with timeout %.0f seconds.",
+                    ensembl_gene_id,
+                    attempt,
+                    total_attempts,
+                    retry_delay_seconds,
+                    next_timeout_seconds,
+                )
+                if retry_delay_seconds > 0:
+                    time.sleep(retry_delay_seconds)
+            except requests.ConnectionError as exc:
+                if is_last_attempt:
+                    self._logger.error(
+                        "Request to Ensembl failed for %s after %d attempts due to connection "
+                        "errors: %s",
+                        ensembl_gene_id,
+                        total_attempts,
+                        exc,
+                    )
+                    return None
+
+                retry_delay_seconds = self._request_exception_retry_delays_seconds[attempt - 1]
+                self._logger.warning(
+                    "Request to Ensembl had a connection error for %s on attempt %d/%d. "
+                    "Retrying in %.0f seconds with timeout %.0f seconds.",
+                    ensembl_gene_id,
+                    attempt,
+                    total_attempts,
+                    retry_delay_seconds,
+                    request_timeout_seconds,
+                )
+                if retry_delay_seconds > 0:
+                    time.sleep(retry_delay_seconds)
+            except requests.RequestException as exc:
+                self._logger.error(
+                    "Request to Ensembl failed for %s without retry (%s): %s",
+                    ensembl_gene_id,
+                    exc.__class__.__name__,
+                    exc,
+                )
+                return None
+
+        return None
+
+    def _request_once(self, ensembl_gene_id: str, *, timeout_seconds: float) -> Any:
         self._throttle()
         self._last_request_started_at = time.monotonic()
 
-        try:
-            return self._session.get(
-                f"{self._base_url}/xrefs/id/{ensembl_gene_id}",
-                params={
-                    "all_levels": 1,
-                    "external_db": "Uniprot%",
-                },
-                timeout=self._timeout_seconds,
-            )
-        except requests.RequestException:
-            self._logger.exception("Request to Ensembl failed for %s", ensembl_gene_id)
-            return None
+        return self._session.get(
+            f"{self._base_url}/xrefs/id/{ensembl_gene_id}",
+            params={
+                "all_levels": 1,
+                "external_db": "Uniprot%",
+            },
+            timeout=timeout_seconds,
+        )
 
     def _throttle(self) -> None:
         if self._last_request_started_at is None:

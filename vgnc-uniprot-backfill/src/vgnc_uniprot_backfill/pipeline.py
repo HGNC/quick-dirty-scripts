@@ -8,6 +8,8 @@ from typing import Protocol
 from vgnc_uniprot_backfill.db import VgncCandidateRepository
 from vgnc_uniprot_backfill.ensembl import (
     DEFAULT_MAX_PER_SECOND,
+    DEFAULT_REQUEST_EXCEPTION_RETRY_DELAYS_SECONDS,
+    DEFAULT_TIMEOUT_SECONDS,
     DEFAULT_USER_AGENT,
     EnsemblXrefClient,
     UniprotLookupResult,
@@ -41,6 +43,10 @@ def run_backfill(
     taxon_id: int | None = None,
     max_per_second: float = DEFAULT_MAX_PER_SECOND,
     user_agent: str = DEFAULT_USER_AGENT,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    request_exception_retry_delays_seconds: tuple[float, ...] = (
+        DEFAULT_REQUEST_EXCEPTION_RETRY_DELAYS_SECONDS
+    ),
     repository: CandidateRepository | None = None,
     ensembl_client: EnsemblLookupClient | None = None,
     report_writer: CsvReportWriter | None = None,
@@ -51,6 +57,8 @@ def run_backfill(
     resolved_client = ensembl_client or EnsemblXrefClient(
         max_per_second=max_per_second,
         user_agent=user_agent,
+        timeout_seconds=timeout_seconds,
+        request_exception_retry_delays_seconds=request_exception_retry_delays_seconds,
         logger=pipeline_logger,
     )
     resolved_writer = report_writer or CsvReportWriter()
