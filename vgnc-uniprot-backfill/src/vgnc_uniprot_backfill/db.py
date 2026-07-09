@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select
+import logging
+
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, aliased, selectinload
 from vgnc_orm import (
@@ -22,9 +24,20 @@ _ENSEMBL_GENE_DB_NAME = "ensembl_gene"
 _UNIPROT_DB_NAME = "uniprot_protein"
 _APPROVED_STATUS_DISPLAY = "Approved"
 _ENSEMBL_ASSEMBLY_SOURCE = "Ensembl"
+_ENSEMBL_XREF_STATUS_CURRENT = "current"
+_ENSEMBL_XREF_STATUS_EXTERNAL_REVIEWED = "externalreviewed"
+_ENSEMBL_XREF_STATUS_EXTERNAL_UNREVIEWED = "externalunreviewed"
+_VALID_ENSEMBL_XREF_STATUSES = (
+    _ENSEMBL_XREF_STATUS_CURRENT,
+    _ENSEMBL_XREF_STATUS_EXTERNAL_REVIEWED,
+    _ENSEMBL_XREF_STATUS_EXTERNAL_UNREVIEWED,
+)
 
 
 class VgncCandidateRepository:
+    def __init__(self, *, logger: logging.Logger | None = None) -> None:
+        self._logger = logger or logging.getLogger(__name__)
+
     def list_candidates(self, taxon_id: int | None = None) -> list[GeneRecord]:
         try:
             initialize_engine()
@@ -42,10 +55,24 @@ class VgncCandidateRepository:
         uniprot_xref = aliased(Xref)
         uniprot_database_resource = aliased(DatabaseResource)
 
-        ensembl_xref_subquery = (
+        normalized_ensembl_status = func.lower(ensembl_xref.status)
+        ensembl_status_priority = case(
+            (normalized_ensembl_status == _ENSEMBL_XREF_STATUS_CURRENT, 0),
+            (normalized_ensembl_status == _ENSEMBL_XREF_STATUS_EXTERNAL_REVIEWED, 1),
+            (normalized_ensembl_status == _ENSEMBL_XREF_STATUS_EXTERNAL_UNREVIEWED, 2),
+            else_=3,
+        )
+
+        ranked_ensembl_xref_subquery = (
             select(
                 ensembl_gene_has_xrefs.genefam_id.label("genefam_id"),
-                func.min(ensembl_xref.xref).label("ensembl_gene_id"),
+                ensembl_xref.xref.label("ensembl_gene_id"),
+                func.row_number()
+                .over(
+                    partition_by=ensembl_gene_has_xrefs.genefam_id,
+                    order_by=(ensembl_status_priority, ensembl_xref.xref),
+                )
+                .label("xref_rank"),
             )
             .select_from(ensembl_gene_has_xrefs)
             .join(ensembl_xref, ensembl_xref.id == ensembl_gene_has_xrefs.xref_id)
@@ -53,8 +80,19 @@ class VgncCandidateRepository:
                 ensembl_database_resource,
                 ensembl_database_resource.id == ensembl_xref.external_db_id,
             )
-            .where(ensembl_database_resource.db_name == _ENSEMBL_GENE_DB_NAME)
-            .group_by(ensembl_gene_has_xrefs.genefam_id)
+            .where(
+                ensembl_database_resource.db_name == _ENSEMBL_GENE_DB_NAME,
+                normalized_ensembl_status.in_(_VALID_ENSEMBL_XREF_STATUSES),
+            )
+            .subquery()
+        )
+
+        ensembl_xref_subquery = (
+            select(
+                ranked_ensembl_xref_subquery.c.genefam_id,
+                ranked_ensembl_xref_subquery.c.ensembl_gene_id,
+            )
+            .where(ranked_ensembl_xref_subquery.c.xref_rank == 1)
             .subquery()
         )
 
@@ -80,7 +118,10 @@ class VgncCandidateRepository:
                 ensembl_xref_subquery.c.ensembl_gene_id,
             )
             .join(GeneStatus, GeneStatus.id == Genefam.status_id)
-            .join(ensembl_xref_subquery, ensembl_xref_subquery.c.genefam_id == Genefam.genefam_id)
+            .outerjoin(
+                ensembl_xref_subquery,
+                ensembl_xref_subquery.c.genefam_id == Genefam.genefam_id,
+            )
             .where(
                 GeneStatus.display == _APPROVED_STATUS_DISPLAY,
                 ~uniprot_exists,
@@ -100,18 +141,31 @@ class VgncCandidateRepository:
 
         rows = session.execute(stmt).all()
 
-        return [
-            GeneRecord(
-                assigned_id=gene.assigned_id,
-                assigned_symbol=gene.assigned_symbol or "",
-                assigned_name=gene.assigned_name or "",
-                status=status_display,
-                species_display_name=gene.species.display_name,
-                chromosome_display_name=_select_chromosome_display_name(gene.locations),
-                ensembl_gene_id=ensembl_gene_id,
+        candidates: list[GeneRecord] = []
+        for gene, status_display, ensembl_gene_id in rows:
+            if not ensembl_gene_id:
+                self._logger.warning(
+                    "Missing valid Ensembl xref in vgnc_public for genefam: "
+                    "assigned_id=%s assigned_symbol=%s species_display_name=%s",
+                    gene.assigned_id,
+                    gene.assigned_symbol or "",
+                    gene.species.display_name,
+                )
+                continue
+
+            candidates.append(
+                GeneRecord(
+                    assigned_id=gene.assigned_id,
+                    assigned_symbol=gene.assigned_symbol or "",
+                    assigned_name=gene.assigned_name or "",
+                    status=status_display,
+                    species_display_name=gene.species.display_name,
+                    chromosome_display_name=_select_chromosome_display_name(gene.locations),
+                    ensembl_gene_id=ensembl_gene_id,
+                )
             )
-            for gene, status_display, ensembl_gene_id in rows
-        ]
+
+        return candidates
 
 
 def _select_chromosome_display_name(locations: list[GeneHasLocation]) -> str:
