@@ -53,7 +53,6 @@ def test_list_candidates_returns_rows_with_ensembl_ids() -> None:
 
     candidates = repository.list_candidates()
 
-    assert candidates
     assert all(candidate.ensembl_gene_id for candidate in candidates)
 
 

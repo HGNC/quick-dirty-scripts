@@ -996,7 +996,7 @@ VALUES
 -- 6. Cross-references (xrefs)
 INSERT IGNORE INTO `xref` (`id`, `external_db_id`, `xref`, `status`)
 VALUES
-(15,      1,  'ENSPTRG00000046631', 'Retired'),
+(15,      1,  'ENSPTRG00000046631', 'Current'),
 (16,      2,  '456995',             'Current'),
 (18,      5,  '3145',               'Current'),
 (21,      7,  '456995',             'Current'),
