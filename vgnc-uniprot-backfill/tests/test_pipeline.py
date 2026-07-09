@@ -75,6 +75,28 @@ class _StubEnsemblClient:
         return UniprotLookupResult(xrefs=[], failed=True)
 
 
+class _StubRepositoryWith400Failure:
+    def list_candidates(self, taxon_id: int | None = None) -> list[GeneRecord]:
+        assert taxon_id == 9031
+        return [
+            GeneRecord(
+                assigned_id="VGNC:123",
+                assigned_symbol="TEST",
+                assigned_name="Test Gene",
+                status="Approved",
+                species_display_name="Gallus gallus",
+                chromosome_display_name="1",
+                ensembl_gene_id="ENSBTAG00000000617",
+            )
+        ]
+
+
+class _StubEnsemblClientWith400Failure:
+    def lookup_uniprot_xrefs(self, ensembl_gene_id: str) -> UniprotLookupResult:
+        assert ensembl_gene_id == "ENSBTAG00000000617"
+        return UniprotLookupResult(xrefs=[], failed=True, status_code=400)
+
+
 def test_run_backfill_writes_expected_csv_and_logs_failure_tally(
     tmp_path: Path,
     caplog,
@@ -109,3 +131,28 @@ def test_run_backfill_writes_expected_csv_and_logs_failure_tally(
     assert client.calls == ["ENSG1", "ENSG2"]
     assert result.lookup_failures == 1
     assert "Ensembl lookup failures: 1" in caplog.text
+
+
+def test_run_backfill_logs_descriptive_warning_for_http_400_failures(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    out_path = tmp_path / "out.csv"
+    logger = logging.getLogger("vgnc_uniprot_backfill.test.http400")
+
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        result = run_backfill(
+            out_path=out_path,
+            taxon_id=9031,
+            repository=_StubRepositoryWith400Failure(),
+            ensembl_client=_StubEnsemblClientWith400Failure(),
+            report_writer=CsvReportWriter(),
+            logger=logger,
+        )
+
+    assert result.lookup_failures == 1
+    assert "Ensembl request failed for ENSBTAG00000000617 with status 400." in caplog.text
+    assert (
+        "Out of date Ensembl accession likely used for TEST VGNC:123 Gallus gallus"
+        in caplog.text
+    )

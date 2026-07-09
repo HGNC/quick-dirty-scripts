@@ -145,11 +145,11 @@ class VgncCandidateRepository:
         for gene, status_display, ensembl_gene_id in rows:
             if not ensembl_gene_id:
                 self._logger.warning(
-                    "Missing valid Ensembl xref in vgnc_public for genefam: "
-                    "assigned_id=%s assigned_symbol=%s species_display_name=%s",
+                    "No active Ensembl found\n"
+                    "\tfor %s %s %s",
+                    gene.assigned_symbol or "<missing_symbol>",
                     gene.assigned_id,
-                    gene.assigned_symbol or "",
-                    gene.species.display_name,
+                    gene.species.display_name or "<missing_species_display_name>",
                 )
                 continue
 

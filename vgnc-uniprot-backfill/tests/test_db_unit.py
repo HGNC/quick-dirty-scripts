@@ -93,7 +93,5 @@ def test_list_candidates_warns_and_skips_genes_without_valid_ensembl_xref(caplog
         candidates = repository._list_candidates(session=session, taxon_id=None)
 
     assert [candidate.assigned_id for candidate in candidates] == ["VGNC:1"]
-    assert (
-        "Missing valid Ensembl xref in vgnc_public for genefam: "
-        "assigned_id=VGNC:2 assigned_symbol=GENE2 species_display_name=Gallus gallus"
-    ) in caplog.text
+    assert "No active Ensembl found" in caplog.text
+    assert "	for GENE2 VGNC:2 Gallus gallus" in caplog.text

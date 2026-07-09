@@ -59,7 +59,8 @@ def run_backfill(
         resolved_repository.list_candidates(taxon_id=taxon_id),
         key=lambda candidate: candidate.assigned_id,
     )
-    ensembl_gene_ids = sorted({candidate.ensembl_gene_id for candidate in candidates})
+    candidates_by_ensembl_gene_id = _group_candidates_by_ensembl_gene_id(candidates)
+    ensembl_gene_ids = sorted(candidates_by_ensembl_gene_id)
 
     lookup_failures = 0
     xrefs_by_ensembl_gene_id: dict[str, list[UniprotXref]] = {}
@@ -67,6 +68,13 @@ def run_backfill(
         lookup_result = resolved_client.lookup_uniprot_xrefs(ensembl_gene_id)
         if lookup_result.failed:
             lookup_failures += 1
+            _log_lookup_warning(
+                logger=pipeline_logger,
+                ensembl_gene_id=ensembl_gene_id,
+                status_code=lookup_result.status_code,
+                candidates=candidates_by_ensembl_gene_id.get(ensembl_gene_id, []),
+            )
+
         xrefs_by_ensembl_gene_id[ensembl_gene_id] = sorted(
             lookup_result.xrefs,
             key=lambda xref: (xref.accession, xref.source),
@@ -84,6 +92,47 @@ def run_backfill(
         report_rows=len(report_rows),
         lookup_failures=lookup_failures,
     )
+
+
+def _group_candidates_by_ensembl_gene_id(
+    candidates: list[GeneRecord],
+) -> dict[str, list[GeneRecord]]:
+    grouped_candidates: dict[str, list[GeneRecord]] = {}
+    for candidate in candidates:
+        grouped_candidates.setdefault(candidate.ensembl_gene_id, []).append(candidate)
+
+    return grouped_candidates
+
+
+def _log_lookup_warning(
+    *,
+    logger: logging.Logger,
+    ensembl_gene_id: str,
+    status_code: int | None,
+    candidates: list[GeneRecord],
+) -> None:
+    if status_code == 400 and candidates:
+        for candidate in candidates:
+            logger.warning(
+                "Ensembl request failed for %s with status %s.\n"
+                "\tOut of date Ensembl accession likely used for %s %s %s",
+                ensembl_gene_id,
+                status_code,
+                candidate.assigned_symbol or "<missing_symbol>",
+                candidate.assigned_id,
+                candidate.species_display_name or "<missing_species_display_name>",
+            )
+        return
+
+    if status_code is not None:
+        logger.warning(
+            "Ensembl request failed for %s with status %s.",
+            ensembl_gene_id,
+            status_code,
+        )
+        return
+
+    logger.warning("Ensembl request failed for %s.", ensembl_gene_id)
 
 
 def _expand_report_rows(

@@ -123,3 +123,4 @@ def test_lookup_uniprot_xrefs_marks_failures_explicitly() -> None:
 
     assert result.xrefs == []
     assert result.failed is True
+    assert result.status_code == 503

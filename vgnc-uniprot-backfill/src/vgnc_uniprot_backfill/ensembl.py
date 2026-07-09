@@ -23,6 +23,7 @@ class UniprotXref:
 class UniprotLookupResult:
     xrefs: list[UniprotXref]
     failed: bool
+    status_code: int | None = None
 
 
 class EnsemblXrefClient:
@@ -73,23 +74,22 @@ class EnsemblXrefClient:
                 return UniprotLookupResult(xrefs=[], failed=True)
 
         if response.status_code >= 400:
-            self._logger.warning(
-                "Ensembl request failed for %s with status %s",
-                ensembl_gene_id,
-                response.status_code,
-            )
-            return UniprotLookupResult(xrefs=[], failed=True)
+            return UniprotLookupResult(xrefs=[], failed=True, status_code=response.status_code)
 
         try:
             payload = response.json()
         except ValueError:
             self._logger.warning("Invalid JSON payload from Ensembl for %s", ensembl_gene_id)
-            return UniprotLookupResult(xrefs=[], failed=True)
+            return UniprotLookupResult(xrefs=[], failed=True, status_code=response.status_code)
 
         if not isinstance(payload, list):
-            return UniprotLookupResult(xrefs=[], failed=True)
+            return UniprotLookupResult(xrefs=[], failed=True, status_code=response.status_code)
 
-        return UniprotLookupResult(xrefs=_extract_uniprot_xrefs(payload), failed=False)
+        return UniprotLookupResult(
+            xrefs=_extract_uniprot_xrefs(payload),
+            failed=False,
+            status_code=response.status_code,
+        )
 
     def _request_once(self, ensembl_gene_id: str) -> Any | None:
         self._throttle()
