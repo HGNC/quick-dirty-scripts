@@ -145,8 +145,7 @@ class VgncCandidateRepository:
         for gene, status_display, ensembl_gene_id in rows:
             if not ensembl_gene_id:
                 self._logger.warning(
-                    "No active Ensembl found\n"
-                    "\tfor %s %s %s",
+                    "No active Ensembl found\n\tfor %s %s %s",
                     gene.assigned_symbol or "<missing_symbol>",
                     gene.assigned_id,
                     gene.species.display_name or "<missing_species_display_name>",

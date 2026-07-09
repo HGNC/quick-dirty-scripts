@@ -153,6 +153,5 @@ def test_run_backfill_logs_descriptive_warning_for_http_400_failures(
     assert result.lookup_failures == 1
     assert "Ensembl request failed for ENSBTAG00000000617 with status 400." in caplog.text
     assert (
-        "Out of date Ensembl accession likely used for TEST VGNC:123 Gallus gallus"
-        in caplog.text
+        "Out of date Ensembl accession likely used for TEST VGNC:123 Gallus gallus" in caplog.text
     )
