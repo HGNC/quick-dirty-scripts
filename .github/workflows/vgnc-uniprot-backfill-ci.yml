@@ -12,11 +12,6 @@ on:
       - "vgnc-uniprot-backfill/**"
       - ".github/workflows/vgnc-uniprot-backfill-ci.yml"
   workflow_dispatch:
-    inputs:
-      dump_url:
-        description: "Optional SQL or SQL.GZ dump URL for DB integration tests"
-        required: false
-        type: string
 
 concurrency:
   group: vgnc-uniprot-backfill-ci-${{ github.ref }}
@@ -54,32 +49,10 @@ jobs:
       - name: Unit tests
         run: uv run pytest tests/test_models.py tests/test_ensembl.py -q
 
-  integration-db-gate:
-    name: Determine whether DB integration tests should run
-    needs: lint-and-unit
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.check.outputs.should_run }}
-    steps:
-      - name: Check dump URL availability
-        id: check
-        env:
-          DISPATCH_DUMP_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.dump_url || '' }}
-          SECRET_DUMP_URL: ${{ secrets.VGNC_PUBLIC_SQL_DUMP_URL }}
-        run: |
-          if [[ -n "${DISPATCH_DUMP_URL}" || -n "${SECRET_DUMP_URL}" ]]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          fi
-
   integration-db:
     name: DB integration tests
-    needs:
-      - lint-and-unit
-      - integration-db-gate
+    needs: lint-and-unit
     runs-on: ubuntu-latest
-    if: ${{ needs.integration-db-gate.outputs.should_run == 'true' }}
     defaults:
       run:
         working-directory: vgnc-uniprot-backfill
@@ -89,7 +62,6 @@ jobs:
       DB_NAME: vgnc_public
       DB_USER: vgnc
       DB_PASSWORD: vgnc
-      VGNC_PUBLIC_SQL_DUMP_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.dump_url || secrets.VGNC_PUBLIC_SQL_DUMP_URL }}
 
     services:
       mysql:
@@ -140,24 +112,10 @@ jobs:
             exit 1
           fi
 
-      - name: Import vgnc_public SQL dump
+      - name: Import vgnc_public test data
         run: |
-          set -euo pipefail
-
-          if [[ -z "${VGNC_PUBLIC_SQL_DUMP_URL}" ]]; then
-            echo "VGNC_PUBLIC_SQL_DUMP_URL is required for integration tests" >&2
-            exit 1
-          fi
-
-          curl -fsSL "${VGNC_PUBLIC_SQL_DUMP_URL}" -o /tmp/vgnc_public.dump
-
-          if [[ "${VGNC_PUBLIC_SQL_DUMP_URL}" == *.gz ]]; then
-            gunzip -c /tmp/vgnc_public.dump > /tmp/vgnc_public.sql
-          else
-            mv /tmp/vgnc_public.dump /tmp/vgnc_public.sql
-          fi
-
-          cat /tmp/vgnc_public.sql | docker exec -i '${{ job.services.mysql.id }}' mysql -uroot -proot vgnc_public
+          cat tests/vgnc_public_test_data_and_schema.sql \
+            | docker exec -i '${{ job.services.mysql.id }}' mysql -uroot -proot vgnc_public
 
       - name: DB integration tests
         run: uv run pytest tests/test_db.py -q
